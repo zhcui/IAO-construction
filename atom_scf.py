@@ -7,6 +7,7 @@ Zhihao Cui <zcui@caltech.edu>
 
 import os, sys
 import copy
+from functools import reduce
 import numpy as np
 import scipy.linalg as la
 
@@ -125,7 +126,7 @@ class Atom_Info(object):
     def name2idx(self, name):
         return self.name_dict[name]
 
-def build_atom_cell(name, basis, pseudo, spin, charge=0, box_length=10.0):
+def build_atom_cell(name, basis, pseudo, spin, charge=0, box_length=20.0):
     """
     Build cell (with vacuum) for atom calculation.
     """
@@ -159,11 +160,11 @@ def atom_scf(mol, method='ROHF', **kwargs):
 
         pmf = scf.KROHF(pmol)
         pmf.max_cycle  = 5000
-        pmf.conv_tol   = 1e-6
+        pmf.conv_tol   = 1e-8
         pmf = pmf.density_fit()
         pmf.scf()
         info.mfs.append(pmf)
-
+    
         nocc = np.sum(np.asarray(pmf.mo_occ) > 0.0)
         assert(nocc <= info.norbs[i])
         log.debug(mol, "mo_occ: %s", pmf.mo_occ)
@@ -178,6 +179,7 @@ def tile_ao_basis(info):
     Cell's large basis.
     """
     assert(info.mfs)
+    mol = info.mol
     mo_coeff_B2 = [mf.mo_coeff[0][:, :info.norbs[i]] \
             for i, mf in enumerate(info.mfs)]
     nbas_B2 = info.nao_nr()
@@ -191,10 +193,16 @@ def tile_ao_basis(info):
         for j in range(len(bas_idx_old)):
             B2[np.ix_(bas_idx_old[j], bas_idx_new[j])] = \
                     mo_coeff_B2[i]
-    
-    # TODO get overlap
-    print B2.T.dot(B2)
+    return B2
 
+def get_B2(info):
+    return tile_ao_basis(info)
+
+def get_S1_S2_S12(B2, mol):
+    S1 = mol.pbc_intor('cint1e_ovlp_sph', kpt=mol.make_kpts([1,1,1]))
+    S2 = reduce(np.dot, (B2.T.conj(), S1, B2))
+    S12 = S1.dot(B2) 
+    return S1, S2, S12
 
 ### --------- test functions ---------- ###
 

@@ -108,3 +108,6 @@ tmp*
 
 # old
 old/
+
+# molden
+*.molden
