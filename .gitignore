@@ -111,3 +111,5 @@ old/
 
 # molden
 *.molden
+
+*.out

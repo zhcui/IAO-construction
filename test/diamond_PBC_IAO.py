@@ -28,7 +28,7 @@ cell.atom='''C 0.      0.      0.
 cell.ke_cutoff = 100
 cell.basis = 'gth-dzv'
 cell.pseudo = 'gth-pade'
-cell.verbose = 4
+cell.verbose = 5
 cell.build(unit='Angstrom')
 mf = scf.RHF(cell)
 mf.kernel()
@@ -37,19 +37,23 @@ mf.kernel()
 generates IAOs
 '''
 mo_occ = mf.mo_coeff[:,mf.mo_occ>0]
+#a = lo.iao.iao(cell, mo_occ, minao='minao')
 #a = lo.iao.iao(cell, mo_occ, minao='gth-szv')
 a = iao.iao(cell, mo_occ, minao='gth-szv', scf_basis=True, ref_basis='gth-szv') # scf basis
-print a.shape
+print "IAO shape: ", a.shape
 molden.from_mo(cell, 'diamondiao_szv.molden', a)
 
 # Orthogonalize IAO
 a = lo.vec_lowdin(a, mf.get_ovlp())
 molden.from_mo(cell, 'diamondiao_szv_ortho.molden', a)
 
-loc_orb = lo.PM(cell, a).kernel()
+loc_obj = lo.PM(cell, a)
+cost_before = loc_obj.cost_function()
+print "cost function before localization: ", cost_before
+loc_orb = loc_obj.kernel()
 molden.from_mo(cell, 'diamondiao_szv_PM.molden', loc_orb)
 
 #ibo must take the orthonormalized IAOs
-ibo = lo.ibo.ibo(cell, mo_occ, a)
-print ibo.shape
-molden.from_mo(cell, 'diamondibo_szv_ibo.molden', ibo)
+#ibo = lo.ibo.ibo(cell, mo_occ, a)
+#print "IBO shape: ", ibo.shape
+#molden.from_mo(cell, 'diamondibo_szv_ibo.molden', ibo)
