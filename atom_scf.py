@@ -160,12 +160,13 @@ def atom_scf(mol, method='ROHF', **kwargs):
 
         pmf = scf.KROHF(pmol)
         pmf.max_cycle  = 5000
-        pmf.conv_tol   = 1e-8
+        pmf.conv_tol   = 1e-12
         pmf = pmf.density_fit()
         pmf.scf()
         info.mfs.append(pmf)
     
         nocc = np.sum(np.asarray(pmf.mo_occ) > 0.0)
+        assert(pmf.converged)
         assert(nocc <= info.norbs[i])
         log.debug(mol, "mo_occ: %s", pmf.mo_occ)
         log.debug(mol, "nocc: %s", nocc)
@@ -186,7 +187,6 @@ def tile_ao_basis(info):
     nbas_B1 = info.mol.nao_nr()
     B2 = np.zeros((nbas_B1, nbas_B2))
     for i, name in enumerate(info.names_uniq):
-        #idx = info.name2idx(name)
         bas_idx_old = info.basis_idx_old[name]
         bas_idx_new = info.basis_idx_new[name]
         assert(len(bas_idx_old) == len(bas_idx_new))
@@ -277,4 +277,5 @@ if __name__ == '__main__':
     cell = build_simple_cell()
     #atom_info = Atom_Info(cell, ref_basis='gth-szv')
     info = atom_scf(cell, ref_basis='gth-szv')
-    tile_ao_basis(info)
+    B2 = tile_ao_basis(info)
+    s1, s2, s12 = get_S1_S2_S12(B2, cell)
