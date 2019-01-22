@@ -126,7 +126,7 @@ class Atom_Info(object):
     def name2idx(self, name):
         return self.name_dict[name]
 
-def build_atom_cell(name, basis, pseudo, spin, charge=0, box_length=20.0):
+def build_atom_cell(name, basis, pseudo, spin, charge=0, box_length=25.0):
     """
     Build cell (with vacuum) for atom calculation.
     """
@@ -137,6 +137,7 @@ def build_atom_cell(name, basis, pseudo, spin, charge=0, box_length=20.0):
     pmol.charge   = charge
     pmol.pseudo   = pseudo
     pmol.spin     = spin
+    pmol.precision = 1e-12
     pmol.build()
     return pmol
 
@@ -193,6 +194,10 @@ def tile_ao_basis(info):
         for j in range(len(bas_idx_old)):
             B2[np.ix_(bas_idx_old[j], bas_idx_new[j])] = \
                     mo_coeff_B2[i]
+    # normalize
+    S1 = mol.pbc_intor('cint1e_ovlp_sph', kpt=mol.make_kpts([1,1,1]))
+    val = np.diag(reduce(np.dot, (B2.T.conj(), S1, B2)))
+    B2 /= np.sqrt(val)
     return B2
 
 def get_B2(info):
@@ -201,7 +206,7 @@ def get_B2(info):
 def get_S1_S2_S12(B2, mol):
     S1 = mol.pbc_intor('cint1e_ovlp_sph', kpt=mol.make_kpts([1,1,1]))
     S2 = reduce(np.dot, (B2.T.conj(), S1, B2))
-    S12 = S1.dot(B2) 
+    S12 = S1.dot(B2)
     return S1, S2, S12
 
 ### --------- test functions ---------- ###
@@ -272,9 +277,9 @@ def build_simple_cell():
 
 if __name__ == '__main__':
     np.set_printoptions(3, linewidth=1000)
-    #cell = build_diamond_cell()
+    cell = build_diamond_cell()
     #cell = build_random_cell()
-    cell = build_simple_cell()
+    #cell = build_simple_cell()
     #atom_info = Atom_Info(cell, ref_basis='gth-szv')
     info = atom_scf(cell, ref_basis='gth-szv')
     B2 = tile_ao_basis(info)
