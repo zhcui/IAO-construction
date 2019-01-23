@@ -103,6 +103,8 @@ class Atom_Info(object):
         self.pseudo = mol._pseudo
         self.basis_idx_old = {}
         self.basis_idx_new = {}
+        #self.basis_idx_old_full = []
+        self.basis_idx_new_full = []
         start = 0
         for i, (sh0, sh1, ao0, ao1) in enumerate(mol.offset_nr_by_atom()):
             name = self.names[i]
@@ -112,10 +114,12 @@ class Atom_Info(object):
                 self.basis_idx_old[name] = [range(ao0, ao1)]
             else:
                 self.basis_idx_old[name].append(range(ao0, ao1))
+            #self.basis_idx_old_full.append(range(ao0, ao1))
             if name not in self.basis_idx_new:
                 self.basis_idx_new[name] = [range(start, start+norb)]
             else:
                 self.basis_idx_new[name].append(range(start, start+norb))
+            self.basis_idx_new_full.append(range(start, start+norb))
             start += norb
         self.mfs = [] # to be calculate
 
@@ -137,6 +141,7 @@ def build_atom_cell(name, basis, pseudo, spin, charge=0, box_length=25.0):
     pmol.charge   = charge
     pmol.pseudo   = pseudo
     pmol.spin     = spin
+    pmol.unit     = 'A'
     pmol.precision = 1e-12
     pmol.build()
     return pmol
@@ -145,6 +150,8 @@ def build_atom_cell_full_basis(info, order):
     mol = info.mol
     atom_new = [(name, pos) if i == order else ("Ghost:%s"%name, pos)\
             for i, (name, pos) in enumerate(mol._atom)]
+    #atom_new = [(name, pos) \
+    #        for i, (name, pos) in enumerate(mol._atom)]
     names_old = info.names
     names_new = zip(*atom_new)[0]
     atom_name = names_new[order]
@@ -152,26 +159,40 @@ def build_atom_cell_full_basis(info, order):
         for i, name in enumerate(names_new)}
     # FIXME: check if pseudo potential is correctly treated.
     pseudo_new = {atom_name : mol._pseudo[atom_name]}
+    #pseudo_new = {name : mol._pseudo.get(name, mol._pseudo[names_old[i]])
+    #    for i, name in enumerate(names_new)}
     spin = atom_spin(atom_name)
+
     pmol          = gto.Cell()
-    pmol.a        = mol.a
+    pmol.a        = mol.lattice_vectors()
     pmol.atom     = atom_new
     pmol.basis    = basis_new
     pmol.charge   = 0
     pmol.pseudo   = pseudo_new
     pmol.spin     = spin
-    pmol.precision = 1e-12
+    pmol.unit     = 'B'
+    pmol.precision = 1e-10
     pmol.build()
     return pmol
 
-def scf_run(pmol, method='KROHF'):
+def scf_run(pmol, method='KROHF', df_method='gdf', use_saved_eri=False, \
+        eri_fname='./gdf_ints_atom_full_basis.h5'):
     if method == 'KROHF':
         pmf = scf.KROHF(pmol)
     else:
         raise NotImplementedError
     pmf.max_cycle  = 5000
-    pmf.conv_tol   = 1e-12
-    pmf = pmf.density_fit()
+    pmf.conv_tol   = 1e-10
+    if df_method == 'gdf':
+        gdf = df.GDF(pmol, kpts=pmol.make_kpts([1, 1, 1]))
+    else:
+        raise NotImplementedError
+    if not use_saved_eri:
+        gdf._cderi_to_save = eri_fname
+        gdf.build()
+    
+    pmf.with_df = gdf
+    pmf.with_df._cderi = eri_fname
     pmf.scf()
     return pmf
 
@@ -185,15 +206,17 @@ def atom_scf(mol, method='KROHF', full_basis=False, **kwargs):
             basis = {name: info.basis[name]}
             pseudo = {name: info.pseudo[name]}
             spin = info.spins[i]
-            log.debug(mol, "\nAtom calculation")
-            log.debug(mol, 'atom = %s [%s / %s]', name, i+1, len(info.names_uniq))
+            log.debug(mol, '\nAtom calculation [%s / %s]', i+1, len(info.names_uniq))
+            log.debug(mol, 'atom = %s', name)
             log.debug(mol, 'spin = %s', spin)
             log.debug(mol, 'basis = \n%s', basis)
             log.debug(mol, 'pseudo = \n%s', pseudo)
             
             pmol = build_atom_cell(name, basis, pseudo, spin)
             pmol.verbose = 3
-            pmf = scf_run(pmol, method=method)
+            log.debug(mol, 'nelec = %s', pmol.nelectron)
+            
+            pmf = scf_run(pmol, method=method, use_saved_eri=False)
             info.mfs.append(pmf)
         
             nocc = np.sum(np.asarray(pmf.mo_occ) > 0.0)
@@ -205,41 +228,57 @@ def atom_scf(mol, method='KROHF', full_basis=False, **kwargs):
             log.debug(mol, "ao label \n %s", info.ao_labels[i])
     else:
         for i, name in enumerate(info.names):
-            log.debug(mol, "\nAtom calculation")
-            log.debug(mol, 'atom = %s [%s / %s]', name, i+1, len(info.names))
+            idx = info.name2idx(name)
+            log.debug(mol, '\nAtom calculation [%s / %s]', i+1, len(info.names))
+            log.debug(mol, 'atom = %s', name)
             pmol = build_atom_cell_full_basis(info, i)
-            pmol.verbose = 5
-            pmf = scf_run(pmol, method=method)
+            pmol.verbose = 3
+            log.debug(mol, 'nelec = %s', pmol.nelectron)
+            
+            if i == 0:
+                pmf = scf_run(pmol, method=method, use_saved_eri=False)
+            else:
+                # FIXME only calculate the integral once!
+                #pmf = scf_run(pmol, method=method, use_saved_eri=True)
+                pmf = scf_run(pmol, method=method, use_saved_eri=False)
+
             info.mfs.append(pmf)
         
             nocc = np.sum(np.asarray(pmf.mo_occ) > 0.0)
             assert(pmf.converged)
-            assert(nocc <= info.norbs[i])
+            assert(nocc <= info.norbs[idx])
             log.debug(mol, "mo_occ: %s", pmf.mo_occ)
             log.debug(mol, "nocc: %s", nocc)
-            log.debug(mol, "norbs: %s", info.norbs[i])
-            log.debug(mol, "ao label \n %s", info.ao_labels[i])
+            log.debug(mol, "norbs: %s", info.norbs[idx])
+            log.debug(mol, "ao label \n %s", info.ao_labels[idx])
     return info
 
-def tile_ao_basis(info):
+def tile_ao_basis(info, full_basis=False):
     """
     Tile new calculated minimal AO basis to form a basis expanded in 
     Cell's large basis.
     """
     assert(info.mfs)
     mol = info.mol
-    mo_coeff_B2 = [mf.mo_coeff[0][:, :info.norbs[i]] \
-            for i, mf in enumerate(info.mfs)]
     nbas_B2 = info.nao_nr()
     nbas_B1 = info.mol.nao_nr()
     B2 = np.zeros((nbas_B1, nbas_B2))
-    for i, name in enumerate(info.names_uniq):
-        bas_idx_old = info.basis_idx_old[name]
-        bas_idx_new = info.basis_idx_new[name]
-        assert(len(bas_idx_old) == len(bas_idx_new))
-        for j in range(len(bas_idx_old)):
-            B2[np.ix_(bas_idx_old[j], bas_idx_new[j])] = \
-                    mo_coeff_B2[i]
+    if not full_basis:
+        mo_coeff_B2 = [mf.mo_coeff[0][:, :info.norbs[i]] \
+                for i, mf in enumerate(info.mfs)]
+        for i, name in enumerate(info.names_uniq):
+            bas_idx_old = info.basis_idx_old[name]
+            bas_idx_new = info.basis_idx_new[name]
+            assert(len(bas_idx_old) == len(bas_idx_new))
+            for j in range(len(bas_idx_old)):
+                B2[np.ix_(bas_idx_old[j], bas_idx_new[j])] = \
+                        mo_coeff_B2[i]
+    else:
+        mo_coeff_B2 = [mf.mo_coeff[0][:, :info.norbs[info.name2idx(name)]] \
+                for name, mf in zip(info.names, info.mfs)]
+        for i, name in enumerate(info.names):
+            bas_idx_new = info.basis_idx_new_full
+            B2[:, bas_idx_new[i]] = mo_coeff_B2[i]
     # normalize
     S1 = mol.pbc_intor('cint1e_ovlp_sph', kpt=mol.make_kpts([1,1,1]))
     val = np.diag(reduce(np.dot, (B2.T.conj(), S1, B2)))
@@ -256,6 +295,19 @@ def get_S1_S2_S12(B2, mol):
     return S1, S2, S12
 
 ### --------- test functions ---------- ###
+
+def rebuild_cell(mol):
+    pmol          = gto.Cell()
+    pmol.a        = mol.lattice_vectors()
+    pmol.atom     = mol._atom
+    pmol.basis    = mol._basis
+    pmol.charge   = mol.charge
+    pmol.pseudo   = mol._pseudo
+    pmol.spin     = mol.spin
+    pmol.unit     = 'B'
+    pmol.precision = 1e-12
+    pmol.build()
+    return pmol
 
 def build_diamond_cell():
     cell = gto.Cell()
@@ -277,6 +329,7 @@ def build_diamond_cell():
     cell.basis = 'gth-dzv'
     cell.pseudo = 'gth-pade'
     cell.verbose = 5
+    cell.precision = 1e-12
     cell.build(unit='Angstrom')
     return cell
 
@@ -323,14 +376,14 @@ def build_simple_cell():
 
 if __name__ == '__main__':
     np.set_printoptions(3, linewidth=1000)
-    cell = build_diamond_cell()
+    full_basis = False
+    #cell = build_diamond_cell()
     #cell = build_random_cell()
-    #cell = build_simple_cell()
-    info = Atom_Info(cell, ref_basis='gth-szv')
-    #info = atom_scf(cell, ref_basis='gth-szv')
-    #order = 0
-    #build_atom_cell_full_basis(info, order)
-    info = atom_scf(cell, full_basis=True)
-    exit()
-    B2 = tile_ao_basis(info)
+    cell = build_simple_cell()
+    #from pyscf.pbc.gto.cell import copy
+    #cell = copy(cell) 
+    #info = Atom_Info(cell, ref_basis='gth-szv')
+    #info = atom_scf(cell, full_basis=False, ref_basis='gth-szv')
+    info = atom_scf(cell, full_basis=full_basis, ref_basis='gth-szv')
+    B2 = tile_ao_basis(info, full_basis=full_basis)
     s1, s2, s12 = get_S1_S2_S12(B2, cell)

@@ -113,3 +113,7 @@ old/
 *.molden
 
 *.out
+
+*.h5
+
+*.cmd
