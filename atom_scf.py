@@ -141,38 +141,84 @@ def build_atom_cell(name, basis, pseudo, spin, charge=0, box_length=25.0):
     pmol.build()
     return pmol
 
-def atom_scf(mol, method='ROHF', **kwargs):
+def build_atom_cell_full_basis(info, order):
+    mol = info.mol
+    atom_new = [(name, pos) if i == order else ("Ghost:%s"%name, pos)\
+            for i, (name, pos) in enumerate(mol._atom)]
+    names_old = info.names
+    names_new = zip(*atom_new)[0]
+    atom_name = names_new[order]
+    basis_new = {name : mol._basis.get(name, mol._basis[names_old[i]])
+        for i, name in enumerate(names_new)}
+    # FIXME: check if pseudo potential is correctly treated.
+    pseudo_new = {atom_name : mol._pseudo[atom_name]}
+    spin = atom_spin(atom_name)
+    pmol          = gto.Cell()
+    pmol.a        = mol.a
+    pmol.atom     = atom_new
+    pmol.basis    = basis_new
+    pmol.charge   = 0
+    pmol.pseudo   = pseudo_new
+    pmol.spin     = spin
+    pmol.precision = 1e-12
+    pmol.build()
+    return pmol
+
+def scf_run(pmol, method='KROHF'):
+    if method == 'KROHF':
+        pmf = scf.KROHF(pmol)
+    else:
+        raise NotImplementedError
+    pmf.max_cycle  = 5000
+    pmf.conv_tol   = 1e-12
+    pmf = pmf.density_fit()
+    pmf.scf()
+    return pmf
+
+def atom_scf(mol, method='KROHF', full_basis=False, **kwargs):
     """
     Atom calculation to make new basis.
     """
     info = Atom_Info(mol, **kwargs)
-    for i, name in enumerate(info.names_uniq):
-        basis = {name: info.basis[name]}
-        pseudo = {name: info.pseudo[name]}
-        spin = info.spins[i]
-        log.debug(mol, "\natom calculation")
-        log.debug(mol, 'atom = %s', name)
-        log.debug(mol, 'spin = %s', spin)
-        log.debug(mol, 'basis = \n%s', basis)
-        log.debug(mol, 'pseudo = \n%s', pseudo)
+    if not full_basis:
+        for i, name in enumerate(info.names_uniq):
+            basis = {name: info.basis[name]}
+            pseudo = {name: info.pseudo[name]}
+            spin = info.spins[i]
+            log.debug(mol, "\nAtom calculation")
+            log.debug(mol, 'atom = %s [%s / %s]', name, i+1, len(info.names_uniq))
+            log.debug(mol, 'spin = %s', spin)
+            log.debug(mol, 'basis = \n%s', basis)
+            log.debug(mol, 'pseudo = \n%s', pseudo)
+            
+            pmol = build_atom_cell(name, basis, pseudo, spin)
+            pmol.verbose = 3
+            pmf = scf_run(pmol, method=method)
+            info.mfs.append(pmf)
         
-        pmol = build_atom_cell(name, basis, pseudo, spin)
-        pmol.verbose = 3
-
-        pmf = scf.KROHF(pmol)
-        pmf.max_cycle  = 5000
-        pmf.conv_tol   = 1e-12
-        pmf = pmf.density_fit()
-        pmf.scf()
-        info.mfs.append(pmf)
-    
-        nocc = np.sum(np.asarray(pmf.mo_occ) > 0.0)
-        assert(pmf.converged)
-        assert(nocc <= info.norbs[i])
-        log.debug(mol, "mo_occ: %s", pmf.mo_occ)
-        log.debug(mol, "nocc: %s", nocc)
-        log.debug(mol, "norbs: %s", info.norbs[i])
-        log.debug(mol, "ao label \n %s", info.ao_labels[i])
+            nocc = np.sum(np.asarray(pmf.mo_occ) > 0.0)
+            assert(pmf.converged)
+            assert(nocc <= info.norbs[i])
+            log.debug(mol, "mo_occ: %s", pmf.mo_occ)
+            log.debug(mol, "nocc: %s", nocc)
+            log.debug(mol, "norbs: %s", info.norbs[i])
+            log.debug(mol, "ao label \n %s", info.ao_labels[i])
+    else:
+        for i, name in enumerate(info.names):
+            log.debug(mol, "\nAtom calculation")
+            log.debug(mol, 'atom = %s [%s / %s]', name, i+1, len(info.names))
+            pmol = build_atom_cell_full_basis(info, i)
+            pmol.verbose = 5
+            pmf = scf_run(pmol, method=method)
+            info.mfs.append(pmf)
+        
+            nocc = np.sum(np.asarray(pmf.mo_occ) > 0.0)
+            assert(pmf.converged)
+            assert(nocc <= info.norbs[i])
+            log.debug(mol, "mo_occ: %s", pmf.mo_occ)
+            log.debug(mol, "nocc: %s", nocc)
+            log.debug(mol, "norbs: %s", info.norbs[i])
+            log.debug(mol, "ao label \n %s", info.ao_labels[i])
     return info
 
 def tile_ao_basis(info):
@@ -280,7 +326,11 @@ if __name__ == '__main__':
     cell = build_diamond_cell()
     #cell = build_random_cell()
     #cell = build_simple_cell()
-    #atom_info = Atom_Info(cell, ref_basis='gth-szv')
-    info = atom_scf(cell, ref_basis='gth-szv')
+    info = Atom_Info(cell, ref_basis='gth-szv')
+    #info = atom_scf(cell, ref_basis='gth-szv')
+    #order = 0
+    #build_atom_cell_full_basis(info, order)
+    info = atom_scf(cell, full_basis=True)
+    exit()
     B2 = tile_ao_basis(info)
     s1, s2, s12 = get_S1_S2_S12(B2, cell)
